@@ -5,6 +5,9 @@
 
 #if __cplusplus <= 201200L
 
+#ifndef CUSTOM_INDEX_SEQUENCE
+#define CUSTOM_INDEX_SEQUENCE
+
 namespace std {
 
 // index_sequence
@@ -18,6 +21,8 @@ template <std::size_t... Is>
 struct make_index_sequence<0u, Is...> : index_sequence<Is...> { using type = index_sequence<Is...>; };
 
 };
+
+#endif
 
 #endif
 

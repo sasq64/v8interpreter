@@ -396,6 +396,8 @@ public:
 	std::string exec(const std::string &source_code);
 	void callWithContext(std::function<void()> cb);
 	std::shared_ptr<REPL> startREPL();
+	
+	static void update();
 
 private:
 	static v8::Platform *platform;

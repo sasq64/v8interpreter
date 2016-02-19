@@ -1,5 +1,6 @@
 #include "v8interpreter.h"
-
+#include <thread>
+#include <sys/time.h>
 #ifdef USE_REPL
 #include <readline/readline.h>
 #include <readline/history.h>
@@ -66,12 +67,58 @@ class ArrayBufferAllocator : public v8::ArrayBuffer::Allocator {
 
 static ArrayBufferAllocator allocator;
 
+class MyPlatform : public v8::Platform {
+ public:
+  virtual void CallOnBackgroundThread(v8::Task* task, ExpectedRuntime expected_runtime) {
+  	std::thread bg([=]() {
+  		task->Run();
+  	});
+  	bg.detach();
+  
+  }
+  
+  struct Task {
+  	Task(v8::Task *task, double when) : task(task), when(when) {}
+  	v8::Task *task;
+  	double when;
+  };
+  
+  std::vector<Task> tasks;
+
+  virtual void CallOnForegroundThread(v8::Isolate* isolate, v8::Task* task) {
+  	tasks.emplace_back(task, 0);
+  }
+  virtual void CallDelayedOnForegroundThread(v8::Isolate* isolate, v8::Task* task, double delay) {
+  	tasks.emplace_back(task, delay + MonotonicallyIncreasingTime());
+  }
+  
+  void update() {
+  	auto t = MonotonicallyIncreasingTime();
+  	auto it = tasks.begin();
+  	while(it != tasks.end()) {
+  		if(it->when >= t) {
+  			it->task->Run();
+  			it = tasks.erase(it);	
+  		} else
+  			it++;
+  	}
+  }
+
+  virtual double MonotonicallyIncreasingTime() {
+	timeval tv;
+	gettimeofday(&tv, NULL);
+	return  (double)(tv.tv_sec * 1000000 + tv.tv_usec) / 1000000.0;
+  	
+  }
+};
+
+
 V8Interpreter::V8Interpreter() {
 	using namespace v8;
 	if(!platform) {
 		V8::InitializeICU();
 		V8::InitializeExternalStartupData("");
-		platform = platform::CreateDefaultPlatform();
+		platform = new MyPlatform();
 		V8::InitializePlatform(platform);
 		V8::Initialize();
 	}
@@ -131,6 +178,7 @@ void V8Interpreter::load(const std::string &fileName) {
 	FILE *fp = fopen( fileName.c_str(), "rb");
 	fseek(fp, 0, SEEK_END);
 	uint32_t size = ftell(fp);
+	fseek(fp, 0, SEEK_SET);
 	auto source_code = new char [size + 1];
 	source_code[size] = 0;
 	fread(source_code, 1, size, fp);
@@ -171,7 +219,12 @@ void V8Interpreter::callback(const v8::FunctionCallbackInfo<v8::Value> &v) {
 	f->call(v);
 };
 
+void V8Interpreter::update() {
+	((MyPlatform*)platform)->update();
+}
+
 #ifdef USE_REPL
+#include <coreutils/utils.h>
 
 std::shared_ptr<V8Interpreter::REPL> V8Interpreter::startREPL() {
 
@@ -193,7 +246,7 @@ std::shared_ptr<V8Interpreter::REPL> V8Interpreter::startREPL() {
 				utils::sleepms(100);
 			}
 			
-			utils::print_fmt("=>%s\n", repl->result);
+			printf("=>%s\n", repl->result.c_str());
 			
 			if(line && line[0])
 				add_history(line);
