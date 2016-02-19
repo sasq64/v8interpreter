@@ -1,7 +1,7 @@
 #ifndef V8_INTERPRETER_JSOBJECT_H
 #define V8_INTERPRETER_JSOBJECT_H
 
-#include "v8.h"
+#include "v8common.h"
 #include "v8cast.h"
 
 ///

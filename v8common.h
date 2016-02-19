@@ -1,9 +1,8 @@
 #ifndef V8INTERPRETER_V8_H
 #define V8INTERPRETER_V8_H
 
-#include <include/libplatform/libplatform.h>
-#include <include/v8.h>
-
+#include <v8.h>
+#include <v8-platform.h>
 #include <string>
 
 std::string demangle(const char* name);

@@ -1,7 +1,7 @@
 #ifndef V8INTERPRETER_H
 #define V8INTERPRETER_H
 
-#include "v8.h"
+#include "v8common.h"
 #include "v8cast.h"
 #include "dispatch.h"
 
