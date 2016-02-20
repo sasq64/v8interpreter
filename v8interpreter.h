@@ -12,7 +12,8 @@
 #include <deque>
 #include <thread>
 #include <assert.h>
-
+#include <atomic>
+#include <mutex>
 
 #define TYPE(x) demangle(typeid(x).name())
 

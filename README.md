@@ -67,3 +67,4 @@ int main() {
 * Fields can be exposed as pointer to class member, offset into class, or through a getter/setter combination
 * Class fields are exposed by reference, fundamental types are not. That allows you to do things like `obj.pos.x = 0`
 * Assigning a registered class from anonymous objects works, as long as the class has a default constructor
+g++ -Os -DTESTME -Iv8build/v8/include v8interpreter.cpp -o v8 -Wl,--start-group v8build/v8/out/native/obj.target/{tools/gyp/libv8_{base,libbase,external_snapshot,libplatform},third_party/icu/libicu{uc,i18n,data}}.a -Wl,--end-group -lrt -ldl -pthread -std=c++0x
