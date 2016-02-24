@@ -88,10 +88,7 @@ template <typename CLASS, typename T> struct OffsetRef : public FieldRefBase<CLA
 	int offset;
 };
 
-
-///
-/// \brief The V8CallInfo class
-///
+// CallInfo class used by dispatch.h to get arguments and set return value of call
 class V8CallInfo {
 public:
 	V8CallInfo(const v8::FunctionCallbackInfo<v8::Value> &cbi) : cbi(cbi) {}
@@ -104,6 +101,7 @@ public:
 		return to_cpp<T*>(cbi[index]);
 	}
 
+	// Allows js functions to be passed and converted to std::function
 	template <typename ... ARGS> std::function<void(ARGS...)> getArg(int index, std::function<void(ARGS...)>*) const {
 		using namespace v8;
 		auto *isolate = cbi.GetIsolate();
@@ -150,7 +148,6 @@ private:
 
 
 //
-// V8Class
 //
 template <typename CLASS> struct V8Class {
 

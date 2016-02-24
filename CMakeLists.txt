@@ -5,7 +5,7 @@ set(SOURCE_FILES v8interpreter.cpp)
 
 if(APPLE)
   set(ICUPATH /usr/local/opt/icu4c/lib)
-  include_directories(/usr/local/include)
+  include_directories(/usr/local/include ../apone/mods)
 endif()
 
 find_library(V8_BASE v8_base)

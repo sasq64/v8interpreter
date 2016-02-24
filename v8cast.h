@@ -4,9 +4,13 @@
 #include "v8.h"
 #define TYPE(x) demangle(typeid(x).name())
 
+#include <unordered_map>
 
-#ifndef LOGW
+#ifdef USE_APONE
+#include <coreutils/log.h>
+#else
 #define LOGW(...)
+#define LOGD(...)
 #endif
 
 /// ****************************** TYPE CONVERSION UTILS ***********************************
@@ -47,6 +51,92 @@ template <typename CLASS> struct JSClass {
 	}
 };
 
+
+template <typename T> struct ObjectHolder {
+
+	ObjectHolder(v8::Isolate *isolate, std::shared_ptr<T> sptr) : sptr(sptr) {
+		using namespace v8;
+		
+		T *ptr = sptr.get();
+		
+		Local<ObjectTemplate> ot;
+		auto *pot = JSClass<T>::get();
+		if(pot) {
+			ot = Local<ObjectTemplate>::New(isolate, *pot);
+		} else {
+			LOGW("Warning: Casting to unregistered class `%s`", TYPE(T));
+			ot = ObjectTemplate::New(isolate);
+			ot->SetInternalFieldCount(1);
+		}
+
+		auto o = ot->NewInstance();
+		o->SetAlignedPointerInInternalField(0, ptr);
+
+		objects()[ptr] = this;
+		
+		holder.Reset(isolate, o);
+		holder.SetWeak(this, callback, v8::WeakCallbackType::kParameter);
+		holder.MarkIndependent();
+		isolate->AdjustAmountOfExternalAllocatedMemory(sizeof(T));
+		LOGD("Created Instance of %s = %p", TYPE(T), ptr);
+	}
+	
+	ObjectHolder(v8::Isolate *isolate, T *ptr) {
+		using namespace v8;
+		Local<ObjectTemplate> ot;
+		auto *pot = JSClass<T>::get();
+		if(pot) {
+			ot = Local<ObjectTemplate>::New(isolate, *pot);
+		} else {
+			LOGW("Warning: Casting to unregistered class `%s`", TYPE(T));
+			ot = ObjectTemplate::New(isolate);
+			ot->SetInternalFieldCount(1);
+		}
+
+		auto o = ot->NewInstance();
+		o->SetAlignedPointerInInternalField(0, ptr);
+
+		objects()[ptr] = this;
+		holder.Reset(isolate, o);
+	
+	}
+	
+
+	static void callback(const v8::WeakCallbackInfo<ObjectHolder<T>>& data) {
+		ObjectHolder<T> *param = data.GetParameter();
+		LOGD("Instance of %s = %p freed", TYPE(T), param->sptr.get());
+		objects()[param->sptr.get()] = nullptr;
+		param->holder.Reset();
+		delete param;
+	}
+	
+	v8::UniquePersistent<v8::Value> holder;
+	std::shared_ptr<T> sptr;
+	
+	static v8::Local<v8::Value> get(v8::Isolate *isolate, std::shared_ptr<T> sp) {	
+		auto *oh = ObjectHolder<T>::objects()[sp.get()];
+		if(!oh)
+			oh = new ObjectHolder(isolate, sp);
+		//else
+			//LOGD("Found existing js object for %s = %p", TYPE(T), sp.get());
+		return v8::Local<v8::Value>::New(isolate, oh->holder);	
+	}		
+
+	static v8::Local<v8::Value> get(v8::Isolate *isolate, T *ptr) {	
+		auto *oh = ObjectHolder<T>::objects()[ptr];
+		if(!oh)
+			oh = new ObjectHolder(isolate, ptr);
+		//else
+			//LOGD("Found existing js object for RAWPTR %s = %p", TYPE(T), ptr);
+		return v8::Local<v8::Value>::New(isolate, oh->holder);	
+	}		
+	
+	static std::unordered_map<T*, ObjectHolder*>& objects() {
+		static std::unordered_map<T*, ObjectHolder*> _objs;
+		return _objs;
+	}
+
+};
 
 
 // Convert V8 Locals to C++ type
@@ -117,6 +207,19 @@ template <typename T> struct JSValue<T*> {
 	}
 };
 
+template <typename T> struct JSValue<std::shared_ptr<T>> {
+	static std::shared_ptr<T> cast(const v8::Local<v8::Value> &v) {
+		auto obj = v8::Local<v8::Object>::Cast(v);
+		if(obj->InternalFieldCount() > 0) {
+			T *ptr = static_cast<T*>(obj->GetAlignedPointerFromInternalField(0));
+			auto *oh = ObjectHolder<T>::objects()[ptr];
+			if(oh)
+				return oh->sptr;
+		}
+		return std::make_shared<T>(JSValue<T>::cast(v));
+	}
+};
+
 template <> struct JSValue<std::string> {
 	static std::string cast(const v8::Local<v8::Value> &v) {
 		char target[1024];
@@ -138,95 +241,40 @@ template <typename T> T to_cpp(const v8::Local<v8::Value> &v) {
 ///
 ///
 
-
-// Helper class that frees temporary objects attached to javascript objects during garbage collection
-template <typename T> struct HandHolder {
-	HandHolder(v8::Isolate *isolate, T *ptr, const v8::Local<v8::Value> &v) : ptr(ptr) {
-		holder.Reset(isolate, v);
-		holder.SetWeak(this, callback, v8::WeakCallbackType::kParameter);
-		holder.MarkIndependent();
-		isolate->AdjustAmountOfExternalAllocatedMemory(sizeof(T));
-	}
-
-	static void callback(const v8::WeakCallbackInfo<HandHolder<T>>& data) {
-		HandHolder<T> *param = data.GetParameter();
-		param->holder.Reset();
-		delete param->ptr;
-		delete param;
-	}
-
-	T *ptr;
-	v8::UniquePersistent<v8::Value> holder;
-};
-
+template <typename T, typename S = T> using is_arithmetic = typename std::enable_if<std::is_arithmetic<T>::value, S>::type;
+template <typename T, typename S = T> using is_not_arithmetic = typename std::enable_if<!std::is_arithmetic<T>::value, S>::type;
 
 template <typename T, typename V = v8::Value> struct CPPValue {
 	static v8::Local<V> cast(v8::Isolate *isolate, const T &t) {
 		using namespace v8;
-		// NOTE: Relies on class registration
-		Local<ObjectTemplate> ot;
-		auto *pot = JSClass<T>::get();
-
-		//LOGD("Converting REF %s to js = %p", demangle(typeid(T).name()), pot);
-
-		if(pot) {
-			ot = Local<ObjectTemplate>::New(isolate, *pot);
-			//LOGD("JSClass exists!");
-		} else {
-			LOGW("Warning: Casting to unregistered class `%s`", TYPE(T));
-			ot = ObjectTemplate::New(isolate);
-			ot->SetInternalFieldCount(1);
-		}
-
-		auto o = ot->NewInstance();
-
-		// Create a copy of the object and make sure it is freed by garbage collector
-		T *ct = new T(t);
-		new HandHolder<T>(isolate, ct, o);
-
-		o->SetAlignedPointerInInternalField(0, ct);
-		return o;
+		//LOGW("Creating copy of %s", TYPE(T));	
+		return ObjectHolder<T>::get(isolate, std::make_shared<T>(t));
 	}
 };
 
 template <typename T, typename V> struct CPPValue<T*, V> {
+
 	static v8::Local<V> cast(v8::Isolate *isolate, T *t) {
 		using namespace v8;
-		// NOTE: Relies on class registration
-		Local<ObjectTemplate> ot;
-		auto *pot = JSClass<T>::get();
-
-		//LOGD("Converting PTR %p %s to js = %p", t, demangle(typeid(T).name()), pot);
-
-		if(pot) {
-			ot = Local<ObjectTemplate>::New(isolate, *pot);
-		} else {
-			LOGW("Warning: Casting to unregistered class `%s`", TYPE(T));
-			ot = ObjectTemplate::New(isolate);
-			ot->SetInternalFieldCount(1);
-		}
-
-		auto o = ot->NewInstance();
-		o->SetAlignedPointerInInternalField(0, t);
-		return o;
+		if(!t)
+			return v8::Null(isolate);
+		// TODO: Option to disallow raw pointers that does not map to a previous shared_ptr
+	//	LOGW("Using raw ptr of %s", TYPE(T));	
+		return ObjectHolder<T>::get(isolate, t);
 	}
 };
 
-template <typename V> struct CPPValue<int, V> {
-	static v8::Local<V> cast(v8::Isolate *isolate, const int &t) {
-		return v8::Number::New(isolate, t);
+template <typename T, typename V> struct CPPValue<std::shared_ptr<T>, V> {
+	static v8::Local<V> cast(v8::Isolate *isolate, std::shared_ptr<T> t) {
+		if(!t)
+			return v8::Null(isolate);
+		return ObjectHolder<T>::get(isolate, t);
 	}
 };
 
-template <typename V> struct CPPValue<double, V> {
-	static v8::Local<V> cast(v8::Isolate *isolate, const double &t) {
-		return v8::Number::New(isolate, t);
-	}
-};
-
-template <typename V> struct CPPValue<float, V> {
-	static v8::Local<V> cast(v8::Isolate *isolate, const float &t) {
-		return v8::Number::New(isolate, t);
+template <typename V> struct CPPValue<std::string*, V> {
+	static v8::Local<V> cast(v8::Isolate *isolate, const std::string *t) {
+		return v8::String::NewFromUtf8(isolate, t->c_str());
 	}
 };
 
@@ -236,8 +284,18 @@ template <typename V> struct CPPValue<std::string, V> {
 	}
 };
 
-template<typename T, typename V = v8::Value> static v8::Local<V> to_js(v8::Isolate *isolate, const T &t) {
+template<typename T, typename V = v8::Value> static is_arithmetic<T, v8::Local<V>> to_js(v8::Isolate *isolate, const T &t) {
+	return v8::Number::New(isolate, t);
+}
+
+template<typename T, typename V = v8::Value> static is_not_arithmetic<T, v8::Local<V>> to_js(v8::Isolate *isolate, const T &t) {
 	return CPPValue<T,V>::cast(isolate, t);
 }
 
+#ifndef USE_APONE
+#undef LOGW
+#undef LOGD
+#endif
+
 #endif // V8INTERPRETER_CAST_H
+
