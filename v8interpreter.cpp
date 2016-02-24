@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <memory>
 #include <cxxabi.h>
+#include <string.h>
 
 std::string demangle(const char* name) {
 

@@ -4,7 +4,7 @@
 #include <v8.h>
 #include <v8-platform.h>
 #include <string>
-
+#include <typeinfo>
 std::string demangle(const char* name);
 
 class v8_exception : public std::exception {

@@ -6,6 +6,11 @@ v8 wrapper with "smart" template based bindings
     brew install v8
     g++ -DTESTME -std=c++11 -I/usr/local/Cellar/v8/4.5.103.35 -L/usr/local/opt/icu4c/lib -lv8_libplatform -lv8_base -lv8_libbase -lv8_snapshot -licudata -licuuc -licui18n v8interpreter.cpp -ov8test
 
+## Linux Quick test
+
+    ./build_v8.sh
+    g++ -DTESTME -Iv8build/v8/include v8interpreter.cpp -o v8test -Wl,--start-group v8build/v8/out/native/obj.target/{tools/gyp/libv8_{base,libbase,external_snapshot,libplatform},third_party/icu/libicu{uc,i18n,data}}.a -Wl,--end-group -lrt -ldl -pthread -std=c++0x
+    cp v8build/v8/out/native/*.bin .
 
 ## How it works
 
