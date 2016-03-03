@@ -5,6 +5,7 @@
 #define TYPE(x) demangle(typeid(x).name())
 
 #include <unordered_map>
+#include <memory>
 
 #ifdef USE_APONE
 #include <coreutils/log.h>
@@ -12,6 +13,8 @@
 #define LOGW(...)
 #define LOGD(...)
 #endif
+
+template <typename T> using ptr = std::shared_ptr<T>;
 
 /// ****************************** TYPE CONVERSION UTILS ***********************************
 
@@ -52,7 +55,7 @@ template <typename CLASS> struct JSClass {
 };
 
 
-template <typename T> struct ObjectHolder {
+template <typename T> struct ObjectHolder : public std::enable_shared_from_this<ObjectHolder<T>> {
 
 	ObjectHolder(v8::Isolate *isolate, std::shared_ptr<T> sptr) : sptr(sptr) {
 		using namespace v8;
@@ -72,7 +75,6 @@ template <typename T> struct ObjectHolder {
 		auto o = ot->NewInstance();
 		o->SetAlignedPointerInInternalField(0, ptr);
 
-		objects()[ptr] = this;
 		
 		holder.Reset(isolate, o);
 		holder.SetWeak(this, callback, v8::WeakCallbackType::kParameter);
@@ -96,16 +98,14 @@ template <typename T> struct ObjectHolder {
 		auto o = ot->NewInstance();
 		o->SetAlignedPointerInInternalField(0, ptr);
 
-		objects()[ptr] = this;
 		holder.Reset(isolate, o);
 	
 	}
 	
-
 	static void callback(const v8::WeakCallbackInfo<ObjectHolder<T>>& data) {
 		ObjectHolder<T> *param = data.GetParameter();
 		LOGD("Instance of %s = %p freed", TYPE(T), param->sptr.get());
-		objects()[param->sptr.get()] = nullptr;
+        objects()[param->sptr.get()] = nullptr;
 		param->holder.Reset();
 		delete param;
 	}
@@ -114,25 +114,29 @@ template <typename T> struct ObjectHolder {
 	std::shared_ptr<T> sptr;
 	
 	static v8::Local<v8::Value> get(v8::Isolate *isolate, std::shared_ptr<T> sp) {	
-		auto *oh = ObjectHolder<T>::objects()[sp.get()];
-		if(!oh)
-			oh = new ObjectHolder(isolate, sp);
-		//else
+        auto oh = ObjectHolder<T>::objects()[sp.get()];
+        if(!oh) {
+            oh = std::make_shared<ObjectHolder>(isolate, sp);
+            ObjectHolder::objects()[sp.get()] = oh;
+        }
+        //else
 			//LOGD("Found existing js object for %s = %p", TYPE(T), sp.get());
 		return v8::Local<v8::Value>::New(isolate, oh->holder);	
 	}		
 
 	static v8::Local<v8::Value> get(v8::Isolate *isolate, T *ptr) {	
-		auto *oh = ObjectHolder<T>::objects()[ptr];
-		if(!oh)
-			oh = new ObjectHolder(isolate, ptr);
+        auto oh = ObjectHolder<T>::objects()[ptr];
+        if(!oh) {
+            oh = std::make_shared<ObjectHolder>(isolate, ptr);
+            ObjectHolder::objects()[ptr] = oh;
+        }
 		//else
 			//LOGD("Found existing js object for RAWPTR %s = %p", TYPE(T), ptr);
 		return v8::Local<v8::Value>::New(isolate, oh->holder);	
 	}		
 	
-	static std::unordered_map<T*, ObjectHolder*>& objects() {
-		static std::unordered_map<T*, ObjectHolder*> _objs;
+    static std::unordered_map<T*, ptr<ObjectHolder>>& objects() {
+        static std::unordered_map<T*, ptr<ObjectHolder>> _objs;
 		return _objs;
 	}
 
@@ -200,9 +204,12 @@ template <typename T> struct JSValue<T*> {
 		if(obj->InternalFieldCount() > 0) {
 			t = static_cast<T*>(obj->GetAlignedPointerFromInternalField(0));
 		}
-		if(!t) {
-			t = new T(JSValue<T>::cast(v));
-		}
+
+        //throw v8_exception("Not a pointer");
+        if(!t) {
+            LOGW(">>> Leaking a %s. Must be fixed!", TYPE(T));
+            t = new T(JSValue<T>::cast(v));
+        }
 		return t;
 	}
 };
@@ -212,7 +219,7 @@ template <typename T> struct JSValue<std::shared_ptr<T>> {
 		auto obj = v8::Local<v8::Object>::Cast(v);
 		if(obj->InternalFieldCount() > 0) {
 			T *ptr = static_cast<T*>(obj->GetAlignedPointerFromInternalField(0));
-			auto *oh = ObjectHolder<T>::objects()[ptr];
+            auto oh = ObjectHolder<T>::objects()[ptr];
 			if(oh)
 				return oh->sptr;
 		}

@@ -387,6 +387,7 @@ public:
 	};
 
 	V8Interpreter();
+    ~V8Interpreter();
 	void start();
 	static void callback(const v8::FunctionCallbackInfo<v8::Value> &v);
 

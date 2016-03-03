@@ -135,6 +135,11 @@ V8Interpreter::V8Interpreter() {
 	global_templ.Reset(isolate, ot);
 };
 
+V8Interpreter::~V8Interpreter() {
+    isolate->Dispose();
+    delete platform;
+}
+
 std::string V8Interpreter::exec(const std::string &source) {
 	using namespace v8;
 	Isolate::Scope isolate_scope(isolate);
@@ -186,6 +191,8 @@ void V8Interpreter::load(const std::string &fileName) {
 	fclose(fp);
 
 	auto fn = String::NewFromUtf8(isolate, source_code);
+
+    delete [] source_code;
 
 	// Create a string containing the JavaScript source code.
 	//Local<String> source = String::NewFromUtf8(isolate, "Window.open(100, 100)");
