@@ -136,7 +136,7 @@ V8Interpreter::V8Interpreter() {
 };
 
 V8Interpreter::~V8Interpreter() {
-    isolate->Dispose();
+    //isolate->Dispose();
     delete platform;
 }
 

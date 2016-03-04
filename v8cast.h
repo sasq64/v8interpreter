@@ -105,9 +105,9 @@ template <typename T> struct ObjectHolder : public std::enable_shared_from_this<
 	static void callback(const v8::WeakCallbackInfo<ObjectHolder<T>>& data) {
 		ObjectHolder<T> *param = data.GetParameter();
 		LOGD("Instance of %s = %p freed", TYPE(T), param->sptr.get());
+        param->holder.Reset();
         objects()[param->sptr.get()] = nullptr;
-		param->holder.Reset();
-		delete param;
+        //delete param;
 	}
 	
 	v8::UniquePersistent<v8::Value> holder;
