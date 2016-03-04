@@ -181,10 +181,6 @@ template <typename CLASS> struct V8Class {
 		return *this;
 	}
 
-	template <class FX> V8Class& method(const std::string &name, FX f) {
-		_method<FX, decltype(&FX::operator())>(name, f);
-		return *this;
-	}
 	
 	template <class RET, class... ARGS> V8Class& method(const std::string &name, RET (CLASS::*f)(ARGS...)) {
 		using namespace v8;
@@ -202,6 +198,22 @@ template <typename CLASS> struct V8Class {
 		return *this;
 	}
 
+	template <class RET, class... ARGS> V8Class& method(const std::string &name, RET (CLASS::*f)(ARGS...) const) {
+		using namespace v8;
+		HandleScope hs(isolate);
+
+		V8FunctionCaller *fn = createFunction<const V8CallInfo>(thisPtr, f);
+
+		Local<Value> data = External::New(isolate, fn);
+
+		auto s = to_js<std::string, String>(isolate, name);
+		auto o = Local<ObjectTemplate>::New(isolate, *otempl);
+
+		Local<FunctionTemplate> ft = FunctionTemplate::New(isolate, callback, data);
+		o->Set(s, ft);
+		return *this;
+	}
+	
 	template <class RET, class... ARGS> V8Class& method(const std::string &name, RET (*f)(ARGS...)) {
 		using namespace v8;
 		HandleScope hs(isolate);
@@ -218,6 +230,11 @@ template <typename CLASS> struct V8Class {
 		return *this;
 	}
 
+	template <class FX> V8Class& method(const std::string &name, FX f) {
+		_method<FX, decltype(&FX::operator())>(name, f);
+		return *this;
+	}
+	
 	static void callback(const v8::FunctionCallbackInfo<v8::Value> &info) {
 		void *p = get_this(info.This());
 		if(!p)
@@ -315,6 +332,26 @@ public:
 
 	using V8FunctionCaller = FunctionCaller<const V8CallInfo>;
 
+
+	template <class RET, class... ARGS> void registerFunction(const std::string &name, RET (*f)(ARGS...)) {
+		using namespace v8;
+
+		HandleScope hs(isolate);
+		auto c = Local<Context>::New(isolate, context);
+		Context::Scope context_scope(c);
+
+		V8FunctionCaller *fn = createFunction<const V8CallInfo>(f);
+
+		Local<Value> data = External::New(isolate, fn);
+		Local<FunctionTemplate> ft = FunctionTemplate::New(isolate, callback, data);
+
+		auto fun = ft->GetFunction();
+
+		Handle<Object> v8RealGlobal = Handle<Object>::Cast(c->Global()->GetPrototype());
+
+		v8RealGlobal->Set(to_js<std::string>(isolate, name), fun);
+	}
+	
 	template <class FX> void registerFunction(const std::string &name, FX f) {
 		using namespace v8;
 

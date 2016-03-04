@@ -78,9 +78,13 @@ template <class STATE, class CALLINFO, class FX, class... ARGS> struct FunctionC
 template <class CLASS, class CALLINFO, class RET, class... ARGS> struct FunctionCallerMember : public FunctionCaller<CALLINFO> {
 
 	FunctionCallerMember(CLASS *c, RET (CLASS::*f)(ARGS...)) : thisPtr(c), func(f) {}
+	FunctionCallerMember(CLASS *c, RET (CLASS::*f)(ARGS...) const) : thisPtr(c), func2(f) {}
 
 	template <size_t ... A> RET apply(CLASS *c, CALLINFO &ci, std::index_sequence<A...>) const {
-		return (c->*func)(ci.getArg(A, (ARGS*)nullptr)...);
+		if(func)
+			return (c->*func)(ci.getArg(A, (ARGS*)nullptr)...);
+		else
+			return (c->*func2)(ci.getArg(A, (ARGS*)nullptr)...);
 	}
 
 	int call(CALLINFO &ci) override {
@@ -90,7 +94,8 @@ template <class CLASS, class CALLINFO, class RET, class... ARGS> struct Function
 		return 0;
 	}
 
-	RET (CLASS::*func)(ARGS...);
+	RET (CLASS::*func)(ARGS...) = 0;
+	RET (CLASS::*func2)(ARGS...) const = 0;
 	CLASS *thisPtr;
 
 };
@@ -161,6 +166,10 @@ template <class CALLINFO, class FX> FunctionCaller<CALLINFO>* createFunction(FX 
 
 template <class CALLINFO, class STATE, class FX> FunctionCaller<CALLINFO>* createFunction(STATE *state, FX f) {
 	return new FunctionCallerFunctor<STATE, CALLINFO, FX, decltype(&FX::operator()) >(state, f);
+}
+
+template <class CALLINFO, class CLASS, class RET, class... ARGS> FunctionCaller<CALLINFO>* createFunction(CLASS *c, RET (CLASS::*f)(ARGS...) const) {
+	return new FunctionCallerMember<CLASS, CALLINFO, RET, ARGS...>(c, f);
 }
 
 template <class CALLINFO, class CLASS, class RET, class... ARGS> FunctionCaller<CALLINFO>* createFunction(CLASS *c, RET (CLASS::*f)(ARGS...)) {
