@@ -108,6 +108,7 @@ public:
 		auto *isolate = cbi.GetIsolate();
 		auto lf = Local<Function>::Cast(cbi[index]);
 		auto pf = std::make_shared<UniquePersistent<Function>>(isolate, lf);
+		// We create a lambda that calls the provided JS function and return it
 		return [=](ARGS... args) {
 			Isolate::Scope isolate_scope(isolate);
 			HandleScope hs(isolate);

@@ -268,8 +268,8 @@ TEST_CASE("Interpreter works", "") {
 		return v;
 	});
 
-	v8.registerFunction("callme", []() -> std::function<void()> {
-			return []() { puts("CALLED"); };
+	v8.registerFunction("callme", [](std::function<void(int)> f) {
+			f(3);
 	});
 
 	v8.registerClass<vec3>()
@@ -284,8 +284,10 @@ TEST_CASE("Interpreter works", "") {
 		var v = getvec();
 		v.y = 4;
 		print("hello " + v);
-		var fn = callme();
-		//fn();
+		function test(l) {
+			print("Got " + l);
+		}
+		callme(test);
 	)");
 }
 

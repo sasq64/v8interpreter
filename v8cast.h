@@ -15,6 +15,9 @@
 #define LOGD(...)
 #endif
 
+template <typename T, typename S = T> using is_arithmetic = typename std::enable_if<std::is_arithmetic<T>::value, S>::type;
+template <typename T, typename S = T> using is_not_arithmetic = typename std::enable_if<!std::is_arithmetic<T>::value, S>::type;
+
 template <typename T> using ptr = std::shared_ptr<T>;
 
 /// ****************************** TYPE CONVERSION UTILS ***********************************
@@ -65,9 +68,12 @@ template <typename CLASS> v8::Local<v8::Object> createproxy(v8::Isolate *isolate
 	return JSClass<CLASS>::createInstance(ptr);
 }
 
-
+// Give ownership of C++ object to V8
+// Accomplished by creating an ObjectHolder for each reference, and using a static map between
+// pointers and the holder.
+//
 template <typename T> struct ObjectHolder : public std::enable_shared_from_this<ObjectHolder<T>> {
-
+private:
 	ObjectHolder(v8::Isolate *isolate, std::shared_ptr<T> sptr) : sptr(sptr) {
 		using namespace v8;
 		
@@ -79,14 +85,18 @@ template <typename T> struct ObjectHolder : public std::enable_shared_from_this<
 			ot = Local<ObjectTemplate>::New(isolate, *pot);
 		} else {
 			LOGW("Warning: Casting to unregistered class `%s`", TYPE(T));
+			// Create an empty object template
 			ot = ObjectTemplate::New(isolate);
 			ot->SetInternalFieldCount(1);
 		}
 
+		// Create a JS object with a pointer to the C++ object
 		auto o = ot->NewInstance();
 		o->SetAlignedPointerInInternalField(0, ptr);
 
-		
+		// Create a 'holder' that keeps the shared_ptr alive by keeping a weak reference
+		// to the created object. I will be notified when it is the last referencer of the
+		// object, at which point it can also release the shared_ptr
 		holder.Reset(isolate, o);
 		holder.SetWeak(this, callback, v8::WeakCallbackType::kParameter);
 		holder.MarkIndependent();
@@ -112,7 +122,8 @@ template <typename T> struct ObjectHolder : public std::enable_shared_from_this<
 		holder.Reset(isolate, o);
 	
 	}
-	
+public:	
+	// Called when v8 no longer has any references to the object
 	static void callback(const v8::WeakCallbackInfo<ObjectHolder<T>>& data) {
 		ObjectHolder<T> *param = data.GetParameter();
 		LOGD("Instance of %s = %p freed", TYPE(T), param->sptr.get());
@@ -121,36 +132,37 @@ template <typename T> struct ObjectHolder : public std::enable_shared_from_this<
         //delete param;
 	}
 	
-	v8::UniquePersistent<v8::Value> holder;
-	std::shared_ptr<T> sptr;
-	
+	// Get or create a Handle to a C++ object
 	static v8::Local<v8::Value> get(v8::Isolate *isolate, std::shared_ptr<T> sp) {	
         auto oh = ObjectHolder<T>::objects()[sp.get()];
         if(!oh) {
-            oh = std::make_shared<ObjectHolder>(isolate, sp);
+			oh = std::shared_ptr<ObjectHolder>(new ObjectHolder(isolate, sp));
             ObjectHolder::objects()[sp.get()] = oh;
         }
-        //else
-			//LOGD("Found existing js object for %s = %p", TYPE(T), sp.get());
 		return v8::Local<v8::Value>::New(isolate, oh->holder);	
 	}		
 
 	static v8::Local<v8::Value> get(v8::Isolate *isolate, T *ptr) {	
         auto oh = ObjectHolder<T>::objects()[ptr];
         if(!oh) {
-            oh = std::make_shared<ObjectHolder>(isolate, ptr);
-            ObjectHolder::objects()[ptr] = oh;
+			// Raw pointer that it not already a shared_ptr. Not good.
+			ObjectHolder oh(isolate, ptr);
+			return oh.holder;
+			//oh = std::shared_ptr<ObjectHolder>(new ObjectHolder(isolate, ptr));
+            //ObjectHolder::objects()[ptr] = oh;
         }
 		//else
 			//LOGD("Found existing js object for RAWPTR %s = %p", TYPE(T), ptr);
 		return v8::Local<v8::Value>::New(isolate, oh->holder);	
 	}		
-	
+private:
     static std::unordered_map<T*, ptr<ObjectHolder>>& objects() {
         static std::unordered_map<T*, ptr<ObjectHolder>> _objs;
 		return _objs;
 	}
 
+	v8::UniquePersistent<v8::Value> holder;
+	std::shared_ptr<T> sptr;
 };
 
 
@@ -183,6 +195,26 @@ template <typename T> struct JSValue {
 		return result;
 	}
 };
+
+// Cast Javascript function to std::function
+template <typename ... ARGS> struct JSValue<std::function<void(ARGS...)>> {
+	static std::function<void(ARGS...)> cast(const v8::Local<v8::Value> &v) {
+		using namespace v8;
+		auto lf = Local<Function>::Cast(v);
+		auto *isolate = v8::Isolate::GetCurrent();
+		auto pf = std::make_shared<UniquePersistent<Function>>(isolate, lf);
+		// We create a lambda that calls the provided JS function and return it
+		return [=](ARGS... args) {
+			Isolate::Scope isolate_scope(isolate);
+			HandleScope hs(isolate);
+			auto recv = Null(isolate);
+			Local<Value> arg_array[] = { to_js(isolate, args)... };
+			auto f = Local<Function>::New(isolate, *pf);
+			f->Call(recv, sizeof...(args), arg_array);
+		};
+	}
+};
+
 
 template <> struct JSValue<double> {
 	static double cast(const v8::Local<v8::Value> &v) {
@@ -246,7 +278,6 @@ template <> struct JSValue<std::string> {
 	}
 };
 
-
 //// The wrapper function for the class templates
 template <typename T> T to_cpp(const v8::Local<v8::Value> &v) {
 	return JSValue<T>::cast(v);
@@ -258,9 +289,6 @@ template <typename T> T to_cpp(const v8::Local<v8::Value> &v) {
 ///
 ///
 ///
-
-template <typename T, typename S = T> using is_arithmetic = typename std::enable_if<std::is_arithmetic<T>::value, S>::type;
-template <typename T, typename S = T> using is_not_arithmetic = typename std::enable_if<!std::is_arithmetic<T>::value, S>::type;
 
 template <typename T, typename V = v8::Value> struct CPPValue {
 	static v8::Local<V> cast(v8::Isolate *isolate, const T &t) {
