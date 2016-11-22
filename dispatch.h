@@ -10,7 +10,7 @@
 
 namespace std {
 
-// index_sequence
+// index_sequence if C++14 is not available
 
 template <std::size_t...> struct index_sequence {};
 
@@ -25,12 +25,6 @@ struct make_index_sequence<0u, Is...> : index_sequence<Is...> { using type = ind
 #endif
 
 #endif
-
-// struct CALLINFO {
-//   CLASS* getThis();
-//   T getArg(int index, T*);
-//   T setReturn();
-//}
 
 // Type erased base class
 template <typename CALLINFO> struct FunctionCaller {
@@ -138,7 +132,7 @@ template <class CALLINFO, class RET, class... ARGS> struct FunctionCallerPointer
 
 	RET (*func)(ARGS...);
 };
-
+ 
 // Specialization with void return value
 template <class CALLINFO, class... ARGS> struct FunctionCallerPointer<CALLINFO, void, ARGS...> : public FunctionCaller<CALLINFO> {
 

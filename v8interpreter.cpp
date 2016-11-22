@@ -1,5 +1,6 @@
 #include "v8interpreter.h"
 #include <thread>
+#include <stdexcept>
 #include <sys/time.h>
 #ifdef USE_REPL
 #include <readline/readline.h>
@@ -36,85 +37,78 @@ std::string demangle(const char* name) {
 }
 
 #endif
-/*void V8Interpreter::V8ObjectBase::addToTemplate(v8::Isolate *isolate, v8::Local<v8::ObjectTemplate> otempl) {
-	using namespace v8;
-	Local<ObjectTemplate> jo = ObjectTemplate::New(isolate);
-	otempl->Set(String::NewFromUtf8(isolate, name.c_str()), jo);
 
-	for(const auto &f : funcList) {
-		Local<Value> data = External::New(isolate, f.caller);
-		Local<FunctionTemplate> ft = FunctionTemplate::New(isolate, callback, data);
-		LOGD("Regestring %s in %s/%p", f.name, name, this);
-		jo->Set(String::NewFromUtf8(isolate, f.name.c_str()), ft);
-	}
+
+std::string readFile(const std::string &name) {
+	FILE *fp = fopen(name.c_str(), "rb");
+	if(!fp)
+		throw std::exception();
+	fseek(fp, 0, SEEK_END);
+	uint32_t size = ftell(fp);
+	fseek(fp, 0, SEEK_SET);
+	char data[size];
+	fread(data, 1, size, fp);
+	fclose(fp);
+
+	return std::string(data, size);
 }
 
-void V8Interpreter::V8ObjectBase::callback(const v8::FunctionCallbackInfo<v8::Value> &v) {
-	using namespace v8;
-	void *ex = External::Cast(*v.Data())->Value();
-	auto *f = static_cast<V8FunctionCaller*>(ex);
-	f->call(v);
-}
-*/
 class ArrayBufferAllocator : public v8::ArrayBuffer::Allocator {
- public:
-  virtual void* Allocate(size_t length) {
-	void* data = AllocateUninitialized(length);
-	return data == NULL ? data : memset(data, 0, length);
-  }
-  virtual void* AllocateUninitialized(size_t length) { return malloc(length); }
-  virtual void Free(void* data, size_t) { free(data); }
+public:
+	virtual void *Allocate(size_t length) {
+		void *data = AllocateUninitialized(length);
+		return data == NULL ? data : memset(data, 0, length);
+	}
+	virtual void *AllocateUninitialized(size_t length) { return malloc(length); }
+	virtual void Free(void *data, size_t) { free(data); }
 };
 
 static ArrayBufferAllocator allocator;
 
-class MyPlatform : public v8::Platform {
- public:
-  virtual void CallOnBackgroundThread(v8::Task* task, ExpectedRuntime expected_runtime) {
-  	std::thread bg([=]() {
-  		task->Run();
-  	});
-  	bg.detach();
-  
-  }
-  
-  struct Task {
-  	Task(v8::Task *task, double when) : task(task), when(when) {}
-  	v8::Task *task;
-  	double when;
-  };
-  
-  std::vector<Task> tasks;
+class MyPlatform : public v8::Platform
+{
+public:
+	virtual void CallOnBackgroundThread(v8::Task *task, ExpectedRuntime expected_runtime) {
+		std::thread bg(&v8::Task::Run, task);
+		bg.detach();
+	}
 
-  virtual void CallOnForegroundThread(v8::Isolate* isolate, v8::Task* task) {
-  	tasks.emplace_back(task, 0);
-  }
-  virtual void CallDelayedOnForegroundThread(v8::Isolate* isolate, v8::Task* task, double delay) {
-  	tasks.emplace_back(task, delay + MonotonicallyIncreasingTime());
-  }
-  
-  void update() {
-  	auto t = MonotonicallyIncreasingTime();
-  	auto it = tasks.begin();
-  	while(it != tasks.end()) {
-  		if(it->when >= t) {
-  			it->task->Run();
-  			it = tasks.erase(it);	
-  		} else
-  			it++;
-  	}
-  }
+	struct Task
+	{
+		Task(v8::Task *task, double when) : task(task), when(when) {}
+		v8::Task *task;
+		double when;
+	};
 
-  virtual double MonotonicallyIncreasingTime() {
-	timeval tv;
-	gettimeofday(&tv, NULL);
-	return  (double)(tv.tv_sec * 1000000 + tv.tv_usec) / 1000000.0;
-  	
-  }
+	std::vector<Task> tasks;
+
+	virtual void CallOnForegroundThread(v8::Isolate *isolate, v8::Task *task) {
+		tasks.emplace_back(task, 0);
+	}
+	virtual void CallDelayedOnForegroundThread(v8::Isolate *isolate, v8::Task *task, double delay) {
+		tasks.emplace_back(task, delay + MonotonicallyIncreasingTime());
+	}
+
+	void update() {
+		auto t = MonotonicallyIncreasingTime();
+		auto it = tasks.begin();
+		while(it != tasks.end()) {
+			if(it->when >= t) {
+				it->task->Run();
+				it = tasks.erase(it);
+			} else
+				it++;
+		}
+	}
+
+	virtual double MonotonicallyIncreasingTime() {
+		timeval tv;
+		gettimeofday(&tv, NULL);
+		return (double)(tv.tv_sec * 1000000 + tv.tv_usec) / 1000000.0;
+	}
 };
 
-
-V8Interpreter::V8Interpreter() {
+V8Interpreter::V8Interpreter(bool start) {
 	using namespace v8;
 	if(!platform) {
 		V8::InitializeICU();
@@ -129,10 +123,14 @@ V8Interpreter::V8Interpreter() {
 	isolate = Isolate::New(create_params);
 
 	Isolate::Scope isolate_scope(isolate);
-	HandleScope  hs(isolate);
+	HandleScope hs(isolate);
 
+	// The global object template can be populated before start() is called,
+	// but it is also possible to add to it later using it's prototype
 	Local<ObjectTemplate> ot = ObjectTemplate::New(isolate);
 	global_templ.Reset(isolate, ot);
+	if(start)
+		this->start();
 };
 
 V8Interpreter::~V8Interpreter() {
@@ -141,72 +139,39 @@ V8Interpreter::~V8Interpreter() {
 }
 
 std::string V8Interpreter::exec(const std::string &source) {
-	using namespace v8;
-	Isolate::Scope isolate_scope(isolate);
-	HandleScope hs(isolate);
-	auto c = Local<Context>::New(isolate, context);
-	Context::Scope context_scope(c);
+	Scope scope{ isolate, context };
 
-	auto fn = String::NewFromUtf8(isolate, source.c_str());
+	auto fn = v8::String::NewFromUtf8(isolate, source.c_str());
 
 	// Compile the source code.
-	Local<Script> script = Script::Compile(fn);
+	auto script = v8::Script::Compile(fn);
 
 	// Run the script to get the result.
-	Local<Value> result = script->Run();
+	auto result = script->Run();
 
-	// Convert the result to an UTF8 string and print it.
-	String::Utf8Value utf8(result);
+	v8::String::Utf8Value utf8(result);
 	if(*utf8)
 		return *utf8;
 	return "";
 
 }
 
+std::string V8Interpreter::load(const std::string &fileName) {
+	Scope scope{ isolate, context };
 
-void V8Interpreter::callWithContext(std::function<void()> cb) {
-	using namespace v8;
-	Isolate::Scope isolate_scope(isolate);
-	HandleScope hs(isolate);
-	auto c = Local<Context>::New(isolate, context);
-	Context::Scope context_scope(c);
-	cb();
-}
-void V8Interpreter::load(const std::string &fileName) {
-	using namespace v8;
-	Isolate::Scope isolate_scope(isolate);
-	HandleScope hs(isolate);
-	auto c = Local<Context>::New(isolate, context);
-	Context::Scope context_scope(c);
-
-	//utils::File f { fileName };
-	//auto source_code = f.read();
-	FILE *fp = fopen( fileName.c_str(), "rb");
-	fseek(fp, 0, SEEK_END);
-	uint32_t size = ftell(fp);
-	fseek(fp, 0, SEEK_SET);
-	auto source_code = new char [size + 1];
-	source_code[size] = 0;
-	fread(source_code, 1, size, fp);
-	fclose(fp);
-
-	auto fn = String::NewFromUtf8(isolate, source_code);
-
-    delete [] source_code;
-
-	// Create a string containing the JavaScript source code.
-	//Local<String> source = String::NewFromUtf8(isolate, "Window.open(100, 100)");
+	auto source_code = readFile(fileName);
+	auto fn = v8::String::NewFromUtf8(isolate, source_code.c_str());
 
 	// Compile the source code.
-	Local<Script> script = Script::Compile(fn);
+	auto script = v8::Script::Compile(fn);
 
 	// Run the script to get the result.
-	Local<Value> result = script->Run();
+	auto result = script->Run();
 
-	// Convert the result to an UTF8 string and print it.
-	String::Utf8Value utf8(result);
-	printf("%s\n", *utf8);
-
+	v8::String::Utf8Value utf8(result);
+	if(*utf8)
+		return *utf8;
+	return "";
 }
 
 void V8Interpreter::start() {
@@ -214,12 +179,13 @@ void V8Interpreter::start() {
 	Isolate::Scope isolate_scope(isolate);
 	HandleScope  hs(isolate);
 
+	// Create the global object and context for this interpreter
 	Local<ObjectTemplate> got = Local<ObjectTemplate>::New(isolate, global_templ);
 	auto c = Context::New(isolate, nullptr, got);
 	context.Reset(isolate, c);
-
 }
 
+// Static callback function that extracts a V8FunctionCaller functor and calls it
 void V8Interpreter::callback(const v8::FunctionCallbackInfo<v8::Value> &v) {
 	using namespace v8;
 	void *ex = External::Cast(*v.Data())->Value();
@@ -273,24 +239,37 @@ v8::Platform *V8Interpreter::platform = nullptr;
 
 #ifdef TESTME
 
+#define CATCH_CONFIG_MAIN
+#include "catch.hpp"
+
+
 using namespace std;
 
 struct vec3 {
-	float x;
-	float y;
-	float z;
+	float x = 0;
+	float y = 0;
+	float z = 0;
 
-	string toString() { return "Vec3"; }
+	string toString() { return "Vec3 " + to_string(x) + "," + to_string(y) + "," + to_string(z); }
 
 };
 
-int main() {
-
+TEST_CASE("Interpreter works", "") {
 	V8Interpreter v8;
 	v8.start();
 
 	v8.registerFunction("print", [](string l) {
 		puts(l.c_str());
+	});
+
+	v8.registerFunction("getvec", []() -> vec3 {
+		vec3 v;
+		v.y = 2;
+		return v;
+	});
+
+	v8.registerFunction("callme", []() -> std::function<void()> {
+			return []() { puts("CALLED"); };
 	});
 
 	v8.registerClass<vec3>()
@@ -302,10 +281,12 @@ int main() {
 
 
 	v8.exec(R"(
-		print("hello");
+		var v = getvec();
+		v.y = 4;
+		print("hello " + v);
+		var fn = callme();
+		//fn();
 	)");
-
-	return 0;
 }
 
 #endif

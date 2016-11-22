@@ -330,6 +330,13 @@ template <typename CLASS> struct V8Class {
 class V8Interpreter {
 public:
 
+	struct Scope {
+		Scope(v8::Isolate *isolate, v8::UniquePersistent<v8::Context> &context) : is{ isolate }, hs{ isolate }, cs{ v8::Local<v8::Context>::New(isolate, context) } {}
+		v8::Isolate::Scope is;
+		v8::HandleScope hs;
+		v8::Context::Scope cs;
+	};
+
 	using V8FunctionCaller = FunctionCaller<const V8CallInfo>;
 
 
@@ -355,7 +362,7 @@ public:
 	template <class FX> void registerFunction(const std::string &name, FX f) {
 		using namespace v8;
 
-		HandleScope hs(isolate);
+		HandleScope hs(isolate); // All Locals go into this scope
 		auto c = Local<Context>::New(isolate, context);
 		Context::Scope context_scope(c);
 
@@ -392,10 +399,15 @@ public:
 			throw v8_exception(std::string("Class ") + TYPE(name) + " already registered");
 
 		HandleScope hs(isolate);
-		auto c = Local<Context>::New(isolate, context);
+		//auto c = Local<Context>::New(isolate, context);
 		sClass = new V8Class<CLASS>(isolate, thisPtr);
 
 		return *sClass;
+	}
+
+	template <class FUNCTOR> void callWithContext(const FUNCTOR &cb) {
+		Scope scope{ isolate, context };
+		cb();
 	}
 
 	struct REPL {
@@ -423,12 +435,12 @@ public:
 		std::string result;
 	};
 
-	V8Interpreter();
+	V8Interpreter(bool start = true);
     ~V8Interpreter();
 	void start();
 	static void callback(const v8::FunctionCallbackInfo<v8::Value> &v);
 
-	void load(const std::string &file_name);
+	std::string load(const std::string &file_name);
 	std::string exec(const std::string &source_code);
 	void callWithContext(std::function<void()> cb);
 	std::shared_ptr<REPL> startREPL();

@@ -6,6 +6,7 @@
 
 #include <unordered_map>
 #include <memory>
+#include <string>
 
 #ifdef USE_APONE
 #include <coreutils/log.h>
@@ -28,31 +29,41 @@ template <typename CLASS> struct JSClass {
 		return ptr;
 	}
 
-	static v8::Isolate*& get_isolate() {
+	static v8::Isolate*& isolateRef() {
 		static v8::Isolate *i;
 		return i;
 	}
 
+	// Register a C++ class so it can be used on the JS side
 	static void regClass(v8::Isolate *isolate) {
 
 		auto ot = v8::ObjectTemplate::New(isolate);
 		ot->SetInternalFieldCount(1);
 		auto *otempl = new Template(isolate, ot);
 		get() = otempl;
-		get_isolate() = isolate;
+		isolateRef() = isolate;
 	}
 
-	static v8::Local<v8::Object> createInstance(v8::Isolate *isolate, CLASS *ptr) {
+	// Create a JS proxy object for an object of CLASS
+	static v8::Local<v8::Object> createInstance(CLASS *ptr) {
 		using namespace v8;
 		auto *otempl = get();
 		if(!otempl)
 			throw v8_exception(std::string("Can not create unregistered class `") + TYPE(CLASS) + "`");
-		auto ot = Local<ObjectTemplate>::New(isolate, *otempl);
+		auto ot = Local<ObjectTemplate>::New(isolateRef(), *otempl);
 		Local<Object> obj = ot->NewInstance();
 		obj->SetAlignedPointerInInternalField(0, ptr);
 		return obj;
 	}
 };
+
+template <typename CLASS> v8::Local<v8::Object> createproxy(v8::Isolate *isolate, CLASS *ptr)
+{
+	if(!JSClass<CLASS>::get()) {
+		JSClass<CLASS>::regClass(isolate);
+	}
+	return JSClass<CLASS>::createInstance(ptr);
+}
 
 
 template <typename T> struct ObjectHolder : public std::enable_shared_from_this<ObjectHolder<T>> {
